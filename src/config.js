@@ -32,8 +32,8 @@ module.exports = {
   // venda      = preço a que tu vendes
   DRUGS: {
     cocaina: {
-      name: "Cocaína",
-      emoji: "🤍",
+      name: "Coca",
+      emoji: "⚪",
       civil: 1485,
       contratado: 1580,
       venda: 1940,
@@ -61,7 +61,7 @@ module.exports = {
     },
     opio: {
       name: "Ópio",
-      emoji: "🌸",
+      emoji: "⚪",
       civil: 1405,
       contratado: 1500,
       venda: 1830,
@@ -80,7 +80,7 @@ module.exports = {
   },
 
   // ── Pens ────────────────────────────────────
-  PENS_TOTAL: 300,
+  PENS_TOTAL: 460,
   PENS_PER_CLICK: 20,
   PENS_CLAIM_EMOJI: "🖊️",
 
