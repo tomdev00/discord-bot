@@ -1,18 +1,36 @@
 // =============================================
 //   src/index.js  —  Bot entry point
 // =============================================
-require('dotenv').config();
-const { Client, GatewayIntentBits, Partials, Collection, Events } = require('discord.js');
-const cron = require('node-cron');
-const config = require('./config');
+require("dotenv").config();
+const {
+  Client,
+  GatewayIntentBits,
+  Partials,
+  Collection,
+  Events,
+} = require("discord.js");
+const cron = require("node-cron");
+const config = require("./config");
 
-const { postDailySchedule }                                        = require('./utils/schedule');
-const { postPensMessage, handlePensClaimButton, handleContributeModal, initStatusBoard } = require('./utils/pens');
-const { buildWeeklyEmbed }                                         = require('./utils/session');
-const store = require('./utils/store');
+const {
+  setupPanel,
+  handlePanelButton,
+  handleDrugSelect,
+  handleTypeSelect,
+  handleAddModal,
+  handleMetaModal,
+} = require("./utils/panel");
+const { postDailySchedule } = require("./utils/schedule");
+const {
+  postPensMessage,
+  handlePensClaimButton,
+  initStatusBoard,
+} = require("./utils/pens");
+const { buildWeeklyEmbed } = require("./utils/session");
+const store = require("./utils/store");
 
-const sessionCommands = require('./commands/session');
-const adminCommands   = require('./commands/admin');
+const sessionCommands = require("./commands/session");
+const adminCommands = require("./commands/admin");
 
 // ── Client ───────────────────────────────────
 const client = new Client({
@@ -23,7 +41,12 @@ const client = new Client({
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.MessageContent,
   ],
-  partials: [Partials.Message, Partials.Channel, Partials.Reaction],
+  partials: [
+    Partials.Message,
+    Partials.Channel,
+    Partials.Reaction,
+    Partials.User,
+  ],
 });
 
 // ── Commands ─────────────────────────────────
@@ -36,51 +59,82 @@ for (const cmd of [...sessionCommands, ...adminCommands]) {
 client.once(Events.ClientReady, async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
-  // Daily schedule at midnight
-  cron.schedule('0 0 * * *', async () => {
-    console.log('[Cron] Posting daily schedule...');
-    await postDailySchedule(client);
-  }, { timezone: process.env.TIMEZONE || 'Europe/Lisbon' });
+  await setupPanel(client);
 
-  // Weekly report + pens reset (Sunday midnight)
-  cron.schedule(`0 0 * * ${config.WEEKLY_REPORT_DAY}`, async () => {
-    console.log('[Cron] Weekly reset...');
-    try {
-      const ch = await client.channels.fetch(process.env.SESSION_CHANNEL_ID);
-      await ch.send({ embeds: [buildWeeklyEmbed()] });
-      store.clearWeekly();
-    } catch (e) {
-      console.error('[Cron] Weekly report error:', e.message);
-    }
-    await postPensMessage(client);
-    await initStatusBoard(client);
-  }, { timezone: process.env.TIMEZONE || 'Europe/Lisbon' });
+  // Separador de dia à meia-noite
+  cron.schedule(
+    "0 0 * * *",
+    async () => {
+      console.log("[Cron] Separador de dia + marcação...");
+      const { postDaySeparator } = require("./utils/session");
+      const today = new Date().toDateString();
+      store.saveDaySeparator({ date: today });
+      await postDaySeparator(client);
+      await postDailySchedule(client);
+    },
+    { timezone: process.env.TIMEZONE || "Europe/Lisbon" },
+  );
 
-  console.log('📅 Cron jobs scheduled.');
+  // Reset semanal ao domingo
+  cron.schedule(
+    `0 0 * * ${config.WEEKLY_REPORT_DAY}`,
+    async () => {
+      console.log("[Cron] Weekly reset...");
+      try {
+        const ch = await client.channels.fetch(process.env.SESSION_CHANNEL_ID);
+        await ch.send({ embeds: [buildWeeklyEmbed()] });
+        store.clearWeekly();
+      } catch (e) {
+        console.error("[Cron] Weekly report error:", e.message);
+      }
+      await postPensMessage(client);
+      await initStatusBoard(client);
+    },
+    { timezone: process.env.TIMEZONE || "Europe/Lisbon" },
+  );
+
+  console.log("📅 Cron jobs scheduled.");
 });
 
 // ── Interactions ──────────────────────────────
 client.on(Events.InteractionCreate, async (interaction) => {
-
-  // ── Button: pens claim → open modal
   if (interaction.isButton()) {
-    if (interaction.customId === 'pens_claim') {
+    if (interaction.customId.startsWith("panel_")) {
+      await handlePanelButton(interaction);
+      return;
+    }
+    if (interaction.customId === "pens_claim") {
       await handlePensClaimButton(interaction);
+      return;
     }
     return;
   }
 
-  // ── Modal: contribution form submitted
+  if (interaction.isStringSelectMenu()) {
+    if (interaction.customId === "panel_drug_select") {
+      await handleDrugSelect(interaction);
+      return;
+    }
+    if (interaction.customId === "panel_type_select") {
+      await handleTypeSelect(interaction);
+      return;
+    }
+    return;
+  }
+
   if (interaction.isModalSubmit()) {
-    if (interaction.customId === 'pens_contribute_modal') {
-      await handleContributeModal(interaction);
+    if (interaction.customId.startsWith("panel_qty_modal_")) {
+      await handleAddModal(interaction);
+      return;
+    }
+    if (interaction.customId === "panel_meta_modal") {
+      await handleMetaModal(interaction);
+      return;
     }
     return;
   }
 
-  // ── Slash commands
   if (!interaction.isChatInputCommand()) return;
-
   const command = client.commands.get(interaction.commandName);
   if (!command) return;
 
@@ -88,13 +142,192 @@ client.on(Events.InteractionCreate, async (interaction) => {
     await command.execute(interaction);
   } catch (err) {
     console.error(`[Command] Error in /${interaction.commandName}:`, err);
-    const msg = { content: '❌ Something went wrong running that command.', ephemeral: true };
+    const msg = { content: "❌ Algo correu mal.", ephemeral: true };
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply(msg).catch(() => {});
     } else {
       await interaction.reply(msg).catch(() => {});
     }
   }
+});
+
+// ── Listener: prints no canal de prints ───────
+client.on(Events.MessageCreate, async (message) => {
+  if (message.author.bot) return;
+  if (message.channelId !== process.env.PRINTS_CHANNEL_ID) return;
+
+  const image = message.attachments.find((a) =>
+    a.contentType?.startsWith("image/"),
+  );
+  if (!image) {
+    const warn = await message.reply(
+      "⚠️ Tens de enviar uma **imagem** como print. Tenta outra vez.",
+    );
+    setTimeout(() => warn.delete().catch(() => {}), 5000);
+    return;
+  }
+
+  const chefiaChannel = await message.client.channels
+    .fetch(process.env.CHEFIA_CHANNEL_ID)
+    .catch(() => null);
+  if (!chefiaChannel) return;
+
+  const { EmbedBuilder } = require("discord.js");
+  const embed = new EmbedBuilder()
+    .setTitle("📸  Print de entrega — aguarda confirmação")
+    .setColor(0xfee75c)
+    .addFields(
+      {
+        name: "👤 Membro",
+        value: `<@${message.author.id}> (${message.author.username})`,
+        inline: true,
+      },
+      {
+        name: "📅 Data",
+        value: `<t:${Math.floor(message.createdTimestamp / 1000)}:F>`,
+        inline: true,
+      },
+      {
+        name: "🕐 Hora",
+        value: `<t:${Math.floor(message.createdTimestamp / 1000)}:T>`,
+        inline: true,
+      },
+    )
+    .setImage(image.url)
+    .setFooter({
+      text: `ID do membro: ${message.author.id} | Reage com ✅ para confirmar ou ❌ para rejeitar`,
+    })
+    .setTimestamp();
+
+  const chefiaMsg = await chefiaChannel.send({ embeds: [embed] });
+
+  // Bot reage com ✅ e ❌ para a chefia clicar
+  await chefiaMsg.react("✅");
+  await chefiaMsg.react("❌");
+
+  // Apaga a mensagem original do canal de prints
+  await message.delete().catch(() => {});
+
+  // Guarda a relação entre a mensagem da chefia e o membro
+  const pending = store.getPendingPrints();
+  pending[chefiaMsg.id] = {
+    userId: message.author.id,
+    username: message.author.username,
+    sentAt: message.createdTimestamp,
+  };
+  store.savePendingPrints(pending);
+});
+
+client.on(Events.MessageReactionAdd, async (reaction, user) => {
+  // Ignora reações do bot
+  if (user.bot) return;
+  if (reaction.message.channelId !== process.env.CHEFIA_CHANNEL_ID) return;
+
+  // Verifica se é uma print pendente
+  const pending = store.getPendingPrints();
+  const entry = pending[reaction.message.id];
+  if (!entry) return;
+
+  const emoji = reaction.emoji.name;
+
+  if (emoji === "✅") {
+    // Confirma — marca verde no quadro
+    const { refreshStatusBoard } = require("./utils/pens");
+    const status = store.getStatus();
+    if (status.members[entry.userId]) {
+      status.members[entry.userId].claimed = true;
+    }
+    store.saveStatus(status);
+    await refreshStatusBoard(client);
+
+    // Atualiza o embed da chefia para verde
+    const { EmbedBuilder } = require("discord.js");
+    const embed = new EmbedBuilder()
+      .setTitle("✅  Print confirmada")
+      .setColor(0x57f287)
+      .addFields(
+        {
+          name: "👤 Membro",
+          value: `<@${entry.userId}> (${entry.username})`,
+          inline: true,
+        },
+        {
+          name: "📅 Data",
+          value: `<t:${Math.floor(entry.sentAt / 1000)}:F>`,
+          inline: true,
+        },
+        {
+          name: "🕐 Hora",
+          value: `<t:${Math.floor(entry.sentAt / 1000)}:T>`,
+          inline: true,
+        },
+        { name: "👮 Confirmado por", value: `<@${user.id}>`, inline: true },
+      )
+      .setImage(reaction.message.embeds[0]?.image?.url || "")
+      .setTimestamp();
+
+    await reaction.message.edit({ embeds: [embed] });
+
+    // Avisa o membro por DM
+    try {
+      const member = await client.users.fetch(entry.userId);
+      await member.send(`✅ A tua entrega foi confirmada pela chefia!`);
+    } catch {
+      /* DMs fechadas */
+    }
+  } else if (emoji === "❌") {
+    // Rejeita — mantém vermelho e avisa o membro
+    const { EmbedBuilder } = require("discord.js");
+    const embed = new EmbedBuilder()
+      .setTitle("❌  Print rejeitada")
+      .setColor(0xed4245)
+      .addFields(
+        {
+          name: "👤 Membro",
+          value: `<@${entry.userId}> (${entry.username})`,
+          inline: true,
+        },
+        {
+          name: "📅 Data",
+          value: `<t:${Math.floor(entry.sentAt / 1000)}:F>`,
+          inline: true,
+        },
+        {
+          name: "🕐 Hora",
+          value: `<t:${Math.floor(entry.sentAt / 1000)}:T>`,
+          inline: true,
+        },
+        { name: "👮 Rejeitado por", value: `<@${user.id}>`, inline: true },
+      )
+      .setImage(reaction.message.embeds[0]?.image?.url || "")
+      .setTimestamp();
+
+    await reaction.message.edit({ embeds: [embed] });
+
+    // Devolve as pens ao membro
+    const pens = store.getPens();
+    const claim = pens.claimed.findIndex((c) => c.userId === entry.userId);
+    if (claim !== -1) {
+      pens.remaining += pens.claimed[claim].amount;
+      pens.claimed.splice(claim, 1);
+      store.savePens(pens);
+    }
+
+    // Avisa o membro por DM
+    try {
+      const member = await client.users.fetch(entry.userId);
+      await member.send(
+        `❌ A tua print foi rejeitada pela chefia. As tuas pens foram devolvidas.\n` +
+          `Envia uma nova print no canal <#${process.env.PRINTS_CHANNEL_ID}>.`,
+      );
+    } catch {
+      /* DMs fechadas */
+    }
+  }
+
+  // Remove da lista de pendentes
+  delete pending[reaction.message.id];
+  store.savePendingPrints(pending);
 });
 
 // ── Login ─────────────────────────────────────
