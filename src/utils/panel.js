@@ -48,7 +48,7 @@ function buildPanelEmbed(session) {
         `**Sessões de droga:**\n` +
         `> 🟢 Iniciar sessão  |  ➕ Adicionar unidades  |  🔴 Fechar sessão\n\n` +
         `**Fights:**\n` +
-        `> ⚔️ Nova negociação  |  🏁 Fechar negociação\n\n` +
+        `> ⚔️ Nova negociação\n\n` +
         `**Meta semanal:**\n` +
         `> 🎯 Definir Meta & Publicar Pens\n\n` +
         `**Gestão semanal:**\n` +
@@ -90,12 +90,6 @@ function buildPanelRows(session) {
       .setEmoji("⚔️")
       .setStyle(ButtonStyle.Danger)
       .setDisabled(hasFight),
-    new ButtonBuilder()
-      .setCustomId("panel_fight_end")
-      .setLabel("Fechar Negociação")
-      .setEmoji("🏁")
-      .setStyle(ButtonStyle.Secondary)
-      .setDisabled(!hasFight),
   );
 
   const row3 = new ActionRowBuilder().addComponents(
@@ -151,7 +145,6 @@ async function handlePanelButton(interaction) {
   if (id === "panel_session_add") return handleSessionAdd(interaction);
   if (id === "panel_session_end") return handleSessionEnd(interaction);
   if (id === "panel_fight_start") return handleFightStart(interaction);
-  if (id === "panel_fight_end") return handleFightEnd(interaction);
   if (id === "panel_meta_set") return handleMetaSet(interaction);
   if (id === "panel_weekly_reset") return handleWeeklyReset(interaction);
 }
@@ -231,6 +224,7 @@ async function handleSessionEnd(interaction) {
   await refreshPanel(interaction.client);
 }
 
+// ── Nova negociação → modal com tudo de uma vez
 async function handleFightStart(interaction) {
   const modal = new ModalBuilder()
     .setCustomId("panel_fight_start_modal")
@@ -249,7 +243,7 @@ async function handleFightStart(interaction) {
     new ActionRowBuilder().addComponents(
       new TextInputBuilder()
         .setCustomId("fight_adversario")
-        .setLabel("Adversário")
+        .setLabel("Organização inimiga")
         .setStyle(TextInputStyle.Short)
         .setPlaceholder("ex: Ghosts")
         .setRequired(true)
@@ -258,7 +252,7 @@ async function handleFightStart(interaction) {
     new ActionRowBuilder().addComponents(
       new TextInputBuilder()
         .setCustomId("fight_inicio")
-        .setLabel("Hora de início de negociação")
+        .setLabel("Hora início negociação")
         .setStyle(TextInputStyle.Short)
         .setPlaceholder("ex: 22:17")
         .setRequired(true)
@@ -266,44 +260,8 @@ async function handleFightStart(interaction) {
     ),
     new ActionRowBuilder().addComponents(
       new TextInputBuilder()
-        .setCustomId("fight_nos")
-        .setLabel("Quantos somos nós")
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder("ex: 15")
-        .setRequired(true)
-        .setMaxLength(3),
-    ),
-    new ActionRowBuilder().addComponents(
-      new TextInputBuilder()
-        .setCustomId("fight_eles")
-        .setLabel("Quantos são eles")
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder("ex: 16")
-        .setRequired(true)
-        .setMaxLength(3),
-    ),
-  );
-
-  await interaction.showModal(modal);
-}
-
-async function handleFightEnd(interaction) {
-  const fight = store.getFight();
-  if (!fight)
-    return interaction.reply({
-      content: "❌ Nenhuma negociação ativa.",
-      ephemeral: true,
-    });
-
-  const modal = new ModalBuilder()
-    .setCustomId("panel_fight_end_modal")
-    .setTitle("🏁 Fechar Negociação");
-
-  modal.addComponents(
-    new ActionRowBuilder().addComponents(
-      new TextInputBuilder()
         .setCustomId("fight_fim")
-        .setLabel("Hora de fim de negociação")
+        .setLabel("Hora fim negociação")
         .setStyle(TextInputStyle.Short)
         .setPlaceholder("ex: 22:20")
         .setRequired(true)
@@ -311,12 +269,12 @@ async function handleFightEnd(interaction) {
     ),
     new ActionRowBuilder().addComponents(
       new TextInputBuilder()
-        .setCustomId("fight_desfecho")
-        .setLabel("Desfecho")
+        .setCustomId("fight_contagem")
+        .setLabel("Contagem (ex: 15 vs 16)")
         .setStyle(TextInputStyle.Short)
-        .setPlaceholder("ex: Vitória ou Derrota")
+        .setPlaceholder("ex: 15 vs 16")
         .setRequired(true)
-        .setMaxLength(50),
+        .setMaxLength(10),
     ),
   );
 
@@ -579,15 +537,18 @@ async function handleFightStartModal(interaction) {
     .getTextInputValue("fight_adversario")
     .trim();
   const inicioNeg = interaction.fields.getTextInputValue("fight_inicio").trim();
-  const nosCount = interaction.fields.getTextInputValue("fight_nos").trim();
-  const elesCount = interaction.fields.getTextInputValue("fight_eles").trim();
+  const fimNeg = interaction.fields.getTextInputValue("fight_fim").trim();
+  const contagem = interaction.fields
+    .getTextInputValue("fight_contagem")
+    .trim();
 
   const fight = {
     territorio,
     adversario,
     inicioNeg,
-    nosCount,
-    elesCount,
+    fimNeg,
+    contagem,
+    desfecho: "—",
     openedBy: interaction.user.username,
     openedAt: new Date().toISOString(),
     messageId: null,
@@ -595,57 +556,35 @@ async function handleFightStartModal(interaction) {
 
   store.saveFight(fight);
 
-  // Ping + contagem no canal de contagens
-  const countsCh = await interaction.client.channels.fetch(
-    process.env.COUNTS_CHANNEL_ID,
-  );
-  await countsCh.send(
-    `<@&${process.env.ORG_ROLE_ID}> **${nosCount}** vs **${elesCount}** ${adversario}`,
-  );
-
-  // Embed da negociação no canal de fights
-  const fightsCh = await interaction.client.channels.fetch(
-    process.env.FIGHTS_CHANNEL_ID,
-  );
-  const msg = await fightsCh.send({ embeds: [buildFightEmbed(fight)] });
-  fight.messageId = msg.id;
-  store.saveFight(fight);
-
-  await interaction.reply({
-    content: "✅ Negociação registada!",
-    ephemeral: true,
-  });
-  await refreshPanel(interaction.client);
-}
-
-async function handleFightEndModal(interaction) {
-  const fight = store.getFight();
-  if (!fight)
-    return interaction.reply({
-      content: "❌ Nenhuma negociação ativa.",
-      ephemeral: true,
-    });
-
-  fight.fimNeg = interaction.fields.getTextInputValue("fight_fim").trim();
-  fight.desfecho = interaction.fields
-    .getTextInputValue("fight_desfecho")
-    .trim();
-  fight.closedBy = interaction.user.username;
-
+  // Canal de contagens — ping + contagem
   try {
-    const ch = await interaction.client.channels.fetch(
-      process.env.FIGHTS_CHANNEL_ID,
+    const countsCh = await interaction.client.channels.fetch(
+      process.env.COUNTS_CHANNEL_ID,
     );
-    const msg = await ch.messages.fetch(fight.messageId);
-    await msg.edit({ embeds: [buildFightEmbed(fight, true)] });
+    await countsCh.send(
+      `<@&${process.env.ORG_ROLE_ID}> **${contagem}** ${adversario}`,
+    );
   } catch (e) {
-    console.error("[Fight] Erro ao atualizar embed:", e.message);
+    console.error("[Fight] Erro no canal de contagens:", e.message);
   }
 
-  store.clearFight();
+  // Canal de negociações — embed com reações de desfecho
+  try {
+    const fightsCh = await interaction.client.channels.fetch(
+      process.env.FIGHTS_CHANNEL_ID,
+    );
+    const msg = await fightsCh.send({ embeds: [buildFightEmbed(fight)] });
+    await msg.react("🏆");
+    await msg.react("💀");
+    await msg.react("🚫");
+    fight.messageId = msg.id;
+    store.saveFight(fight);
+  } catch (e) {
+    console.error("[Fight] Erro no canal de negociações:", e.message);
+  }
 
   await interaction.reply({
-    content: `✅ Negociação fechada! Desfecho: **${fight.desfecho}**`,
+    content: "✅ Negociação registada nos dois canais!",
     ephemeral: true,
   });
   await refreshPanel(interaction.client);
@@ -660,5 +599,4 @@ module.exports = {
   handleAddModal,
   handleMetaModal,
   handleFightStartModal,
-  handleFightEndModal,
 };

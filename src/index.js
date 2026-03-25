@@ -20,7 +20,6 @@ const {
   handleAddModal,
   handleMetaModal,
   handleFightStartModal,
-  handleFightEndModal,
 } = require("./utils/panel");
 const { postDailySchedule } = require("./utils/schedule");
 const {
@@ -71,7 +70,6 @@ client.once(Events.ClientReady, async () => {
       const today = new Date().toDateString();
       store.saveDaySeparator({ date: today });
       await postDaySeparator(client);
-      // Ping da org antes da marcação
       const scheduleCh = await client.channels.fetch(
         process.env.SCHEDULE_CHANNEL_ID,
       );
@@ -139,10 +137,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     if (interaction.customId === "panel_fight_start_modal") {
       await handleFightStartModal(interaction);
-      return;
-    }
-    if (interaction.customId === "panel_fight_end_modal") {
-      await handleFightEndModal(interaction);
       return;
     }
     return;
@@ -225,9 +219,37 @@ client.on(Events.MessageCreate, async (message) => {
   store.savePendingPrints(pending);
 });
 
-// ── Listener: reações da chefia nas prints ────
+// ── Listener: reações ─────────────────────────
 client.on(Events.MessageReactionAdd, async (reaction, user) => {
   if (user.bot) return;
+
+  // ── Desfecho da negociação
+  if (reaction.message.channelId === process.env.FIGHTS_CHANNEL_ID) {
+    const fight = store.getFight();
+    if (!fight || fight.messageId !== reaction.message.id) return;
+
+    const emoji = reaction.emoji.name;
+    if (emoji === "🏆") fight.desfecho = "Vitória";
+    else if (emoji === "💀") fight.desfecho = "Derrota";
+    else if (emoji === "🚫") fight.desfecho = "Cancelado";
+    else return;
+
+    store.saveFight(fight);
+
+    try {
+      const { buildFightEmbed } = require("./utils/fights");
+      await reaction.message.edit({ embeds: [buildFightEmbed(fight)] });
+    } catch (e) {
+      console.error("[Fight] Erro ao atualizar desfecho:", e.message);
+    }
+
+    store.clearFight();
+    const { refreshPanel } = require("./utils/panel");
+    await refreshPanel(client);
+    return;
+  }
+
+  // ── Confirmação de prints
   if (reaction.message.channelId !== process.env.CHEFIA_CHANNEL_ID) return;
 
   const pending = store.getPendingPrints();
@@ -240,9 +262,8 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
   if (emoji === "✅") {
     const { refreshStatusBoard } = require("./utils/pens");
     const status = store.getStatus();
-    if (status.members[entry.userId]) {
+    if (status.members[entry.userId])
       status.members[entry.userId].claimed = true;
-    }
     store.saveStatus(status);
     await refreshStatusBoard(client);
 
