@@ -19,6 +19,8 @@ const {
   handleTypeSelect,
   handleAddModal,
   handleMetaModal,
+  handleFightStartModal,
+  handleFightEndModal,
 } = require("./utils/panel");
 const { postDailySchedule } = require("./utils/schedule");
 const {
@@ -26,7 +28,7 @@ const {
   handlePensClaimButton,
   initStatusBoard,
 } = require("./utils/pens");
-const { buildWeeklyEmbed } = require("./utils/session");
+const { buildWeeklyEmbed, postDaySeparator } = require("./utils/session");
 const store = require("./utils/store");
 
 const sessionCommands = require("./commands/session");
@@ -61,15 +63,19 @@ client.once(Events.ClientReady, async () => {
 
   await setupPanel(client);
 
-  // Separador de dia à meia-noite
+  // Separador de dia + marcação à meia-noite
   cron.schedule(
     "0 0 * * *",
     async () => {
       console.log("[Cron] Separador de dia + marcação...");
-      const { postDaySeparator } = require("./utils/session");
       const today = new Date().toDateString();
       store.saveDaySeparator({ date: today });
       await postDaySeparator(client);
+      // Ping da org antes da marcação
+      const scheduleCh = await client.channels.fetch(
+        process.env.SCHEDULE_CHANNEL_ID,
+      );
+      await scheduleCh.send(`<@&${process.env.ORG_ROLE_ID}>`);
       await postDailySchedule(client);
     },
     { timezone: process.env.TIMEZONE || "Europe/Lisbon" },
@@ -131,6 +137,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await handleMetaModal(interaction);
       return;
     }
+    if (interaction.customId === "panel_fight_start_modal") {
+      await handleFightStartModal(interaction);
+      return;
+    }
+    if (interaction.customId === "panel_fight_end_modal") {
+      await handleFightEndModal(interaction);
+      return;
+    }
     return;
   }
 
@@ -143,11 +157,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
   } catch (err) {
     console.error(`[Command] Error in /${interaction.commandName}:`, err);
     const msg = { content: "❌ Algo correu mal.", ephemeral: true };
-    if (interaction.deferred || interaction.replied) {
+    if (interaction.deferred || interaction.replied)
       await interaction.editReply(msg).catch(() => {});
-    } else {
-      await interaction.reply(msg).catch(() => {});
-    }
+    else await interaction.reply(msg).catch(() => {});
   }
 });
 
@@ -200,15 +212,10 @@ client.on(Events.MessageCreate, async (message) => {
     .setTimestamp();
 
   const chefiaMsg = await chefiaChannel.send({ embeds: [embed] });
-
-  // Bot reage com ✅ e ❌ para a chefia clicar
   await chefiaMsg.react("✅");
   await chefiaMsg.react("❌");
-
-  // Apaga a mensagem original do canal de prints
   await message.delete().catch(() => {});
 
-  // Guarda a relação entre a mensagem da chefia e o membro
   const pending = store.getPendingPrints();
   pending[chefiaMsg.id] = {
     userId: message.author.id,
@@ -218,20 +225,19 @@ client.on(Events.MessageCreate, async (message) => {
   store.savePendingPrints(pending);
 });
 
+// ── Listener: reações da chefia nas prints ────
 client.on(Events.MessageReactionAdd, async (reaction, user) => {
-  // Ignora reações do bot
   if (user.bot) return;
   if (reaction.message.channelId !== process.env.CHEFIA_CHANNEL_ID) return;
 
-  // Verifica se é uma print pendente
   const pending = store.getPendingPrints();
   const entry = pending[reaction.message.id];
   if (!entry) return;
 
   const emoji = reaction.emoji.name;
+  const { EmbedBuilder } = require("discord.js");
 
   if (emoji === "✅") {
-    // Confirma — marca verde no quadro
     const { refreshStatusBoard } = require("./utils/pens");
     const status = store.getStatus();
     if (status.members[entry.userId]) {
@@ -240,8 +246,6 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
     store.saveStatus(status);
     await refreshStatusBoard(client);
 
-    // Atualiza o embed da chefia para verde
-    const { EmbedBuilder } = require("discord.js");
     const embed = new EmbedBuilder()
       .setTitle("✅  Print confirmada")
       .setColor(0x57f287)
@@ -268,16 +272,13 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
 
     await reaction.message.edit({ embeds: [embed] });
 
-    // Avisa o membro por DM
     try {
       const member = await client.users.fetch(entry.userId);
-      await member.send(`✅ A tua entrega foi confirmada pela chefia!`);
+      await member.send("✅ A tua entrega foi confirmada pela chefia!");
     } catch {
       /* DMs fechadas */
     }
   } else if (emoji === "❌") {
-    // Rejeita — mantém vermelho e avisa o membro
-    const { EmbedBuilder } = require("discord.js");
     const embed = new EmbedBuilder()
       .setTitle("❌  Print rejeitada")
       .setColor(0xed4245)
@@ -304,7 +305,6 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
 
     await reaction.message.edit({ embeds: [embed] });
 
-    // Devolve as pens ao membro
     const pens = store.getPens();
     const claim = pens.claimed.findIndex((c) => c.userId === entry.userId);
     if (claim !== -1) {
@@ -313,7 +313,6 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
       store.savePens(pens);
     }
 
-    // Avisa o membro por DM
     try {
       const member = await client.users.fetch(entry.userId);
       await member.send(
@@ -325,7 +324,6 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
     }
   }
 
-  // Remove da lista de pendentes
   delete pending[reaction.message.id];
   store.savePendingPrints(pending);
 });

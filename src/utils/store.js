@@ -77,9 +77,14 @@ const store = {
   getPendingPrints: () => read("pendingPrints") || {},
   savePendingPrints: (data) => write("pendingPrints", data),
 
-  // Separador de dia (para não criar duplicados)
+  // Separador de dia
   getDaySeparator: () => read("daySeparator") || { date: null },
   saveDaySeparator: (data) => write("daySeparator", data),
+
+  // Negociação/fight ativa
+  getFight: () => read("fight"),
+  saveFight: (data) => write("fight", data),
+  clearFight: () => write("fight", null),
 };
 
 module.exports = store;

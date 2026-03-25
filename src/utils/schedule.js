@@ -39,8 +39,8 @@ async function postDailySchedule(client) {
         .setTitle(`📅  Marcação de Atividade — ${today}`)
         .setColor(0x5865f2)
         .setDescription(
-          `Reage em **cada hora** com a tua disponibilidade:\n\n` +
-            `${yes} Disponível   ${no} Indisponível   ${maybe} Bot/Auto\n\n` +
+          `Reagir em **cada hora** com a tua disponibilidade:\n\n` +
+            `${yes} Disponível   ${no} Indisponível   ${maybe} Secalhar   ${contratado} Contratado\n\n` +
             `> As reações do bot são apenas para mostrar as opções — **não contam como voto.**`,
         ),
     ],

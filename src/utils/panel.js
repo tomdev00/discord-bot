@@ -18,13 +18,15 @@ const {
   buildSummaryEmbed,
   mergeIntoWeekly,
   buildWeeklyEmbed,
+  postDaySeparator,
 } = require("./session");
+const { buildFightEmbed } = require("./fights");
 
 const DRUGS = config.DRUGS;
 const MATERIALS = config.MATERIALS;
 
 // ─────────────────────────────────────────────
-//   CONSTRUIR O PAINEL
+//   PAINEL
 // ─────────────────────────────────────────────
 
 function buildPanelEmbed(session) {
@@ -33,15 +35,22 @@ function buildPanelEmbed(session) {
       `Unidades: ${session.entries.reduce((s, e) => s + e.qty, 0)}`
     : "⏸️ **Sem sessão ativa**";
 
+  const fight = store.getFight();
+  const fightInfo = fight
+    ? `⚔️ **Negociação ativa:** ${fight.territorio} vs ${fight.adversario}`
+    : "🕊️ **Sem negociação ativa**";
+
   return new EmbedBuilder()
     .setTitle("🎛️  Painel de Controlo — Chefia")
     .setColor(0x5865f2)
     .setDescription(
-      `${sessionInfo}\n\n` +
+      `${sessionInfo}\n${fightInfo}\n\n` +
         `**Sessões de droga:**\n` +
         `> 🟢 Iniciar sessão  |  ➕ Adicionar unidades  |  🔴 Fechar sessão\n\n` +
+        `**Fights:**\n` +
+        `> ⚔️ Nova negociação  |  🏁 Fechar negociação\n\n` +
         `**Meta semanal:**\n` +
-        `> 🎯 Definir Meta & Publicar Pens — publica tudo de uma vez\n\n` +
+        `> 🎯 Definir Meta & Publicar Pens\n\n` +
         `**Gestão semanal:**\n` +
         `> 🔄 Reset semanal completo`,
     )
@@ -51,6 +60,7 @@ function buildPanelEmbed(session) {
 
 function buildPanelRows(session) {
   const hasSession = !!session;
+  const hasFight = !!store.getFight();
 
   const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -75,6 +85,21 @@ function buildPanelRows(session) {
 
   const row2 = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
+      .setCustomId("panel_fight_start")
+      .setLabel("Nova Negociação")
+      .setEmoji("⚔️")
+      .setStyle(ButtonStyle.Danger)
+      .setDisabled(hasFight),
+    new ButtonBuilder()
+      .setCustomId("panel_fight_end")
+      .setLabel("Fechar Negociação")
+      .setEmoji("🏁")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(!hasFight),
+  );
+
+  const row3 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
       .setCustomId("panel_meta_set")
       .setLabel("Definir Meta & Publicar Pens")
       .setEmoji("🎯")
@@ -86,12 +111,8 @@ function buildPanelRows(session) {
       .setStyle(ButtonStyle.Danger),
   );
 
-  return [row1, row2];
+  return [row1, row2, row3];
 }
-
-// ─────────────────────────────────────────────
-//   CRIAR / ATUALIZAR O PAINEL
-// ─────────────────────────────────────────────
 
 async function setupPanel(client) {
   const channel = await client.channels.fetch(process.env.PANEL_CHANNEL_ID);
@@ -121,20 +142,20 @@ async function refreshPanel(client) {
 }
 
 // ─────────────────────────────────────────────
-//   HANDLERS DOS BOTÕES
+//   HANDLERS BOTÕES
 // ─────────────────────────────────────────────
 
 async function handlePanelButton(interaction) {
   const id = interaction.customId;
-
   if (id === "panel_session_start") return handleSessionStart(interaction);
   if (id === "panel_session_add") return handleSessionAdd(interaction);
   if (id === "panel_session_end") return handleSessionEnd(interaction);
+  if (id === "panel_fight_start") return handleFightStart(interaction);
+  if (id === "panel_fight_end") return handleFightEnd(interaction);
   if (id === "panel_meta_set") return handleMetaSet(interaction);
   if (id === "panel_weekly_reset") return handleWeeklyReset(interaction);
 }
 
-// ── Iniciar sessão → dropdown com drogas
 async function handleSessionStart(interaction) {
   const drugOptions = Object.entries(DRUGS).map(([key, d]) => ({
     label: d.name,
@@ -156,7 +177,6 @@ async function handleSessionStart(interaction) {
   });
 }
 
-// ── Adicionar unidades → dropdown civil/contratado
 async function handleSessionAdd(interaction) {
   const session = store.getSession();
   if (!session)
@@ -166,7 +186,6 @@ async function handleSessionAdd(interaction) {
     });
 
   const drug = DRUGS[session.drug];
-
   const row = new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId("panel_type_select")
@@ -184,7 +203,6 @@ async function handleSessionAdd(interaction) {
   });
 }
 
-// ── Fechar sessão
 async function handleSessionEnd(interaction) {
   const session = store.getSession();
   if (!session)
@@ -194,12 +212,9 @@ async function handleSessionEnd(interaction) {
     });
 
   await interaction.deferReply({ ephemeral: true });
-
   mergeIntoWeekly(session);
   store.clearSession();
 
-  // Separador de dia se ainda não existe hoje
-  const { postDaySeparator } = require("./session");
   const sep = store.getDaySeparator();
   const today = new Date().toDateString();
   if (sep.date !== today) {
@@ -216,14 +231,104 @@ async function handleSessionEnd(interaction) {
   await refreshPanel(interaction.client);
 }
 
-// ── Definir meta → modal
+async function handleFightStart(interaction) {
+  const modal = new ModalBuilder()
+    .setCustomId("panel_fight_start_modal")
+    .setTitle("⚔️ Nova Negociação");
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("fight_territorio")
+        .setLabel("Território")
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder("ex: Bairro da Coca")
+        .setRequired(true)
+        .setMaxLength(50),
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("fight_adversario")
+        .setLabel("Adversário")
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder("ex: Ghosts")
+        .setRequired(true)
+        .setMaxLength(50),
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("fight_inicio")
+        .setLabel("Hora de início de negociação")
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder("ex: 22:17")
+        .setRequired(true)
+        .setMaxLength(5),
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("fight_nos")
+        .setLabel("Quantos somos nós")
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder("ex: 15")
+        .setRequired(true)
+        .setMaxLength(3),
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("fight_eles")
+        .setLabel("Quantos são eles")
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder("ex: 16")
+        .setRequired(true)
+        .setMaxLength(3),
+    ),
+  );
+
+  await interaction.showModal(modal);
+}
+
+async function handleFightEnd(interaction) {
+  const fight = store.getFight();
+  if (!fight)
+    return interaction.reply({
+      content: "❌ Nenhuma negociação ativa.",
+      ephemeral: true,
+    });
+
+  const modal = new ModalBuilder()
+    .setCustomId("panel_fight_end_modal")
+    .setTitle("🏁 Fechar Negociação");
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("fight_fim")
+        .setLabel("Hora de fim de negociação")
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder("ex: 22:20")
+        .setRequired(true)
+        .setMaxLength(5),
+    ),
+    new ActionRowBuilder().addComponents(
+      new TextInputBuilder()
+        .setCustomId("fight_desfecho")
+        .setLabel("Desfecho")
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder("ex: Vitória ou Derrota")
+        .setRequired(true)
+        .setMaxLength(50),
+    ),
+  );
+
+  await interaction.showModal(modal);
+}
+
 async function handleMetaSet(interaction) {
   const modal = new ModalBuilder()
     .setCustomId("panel_meta_modal")
     .setTitle("🎯 Definir Meta Semanal");
 
   const matEntries = Object.entries(MATERIALS);
-
   for (let i = 0; i < Math.min(matEntries.length, 5); i++) {
     const [key, mat] = matEntries[i];
     modal.addComponents(
@@ -242,7 +347,6 @@ async function handleMetaSet(interaction) {
   await interaction.showModal(modal);
 }
 
-// ── Reset semanal
 async function handleWeeklyReset(interaction) {
   await interaction.deferReply({ ephemeral: true });
 
@@ -253,8 +357,8 @@ async function handleWeeklyReset(interaction) {
   store.clearWeekly();
   store.clearMeta();
   store.clearSession();
+  store.clearFight();
 
-  // Reset pens inline (evita referência circular)
   store.savePens({
     remaining: config.PENS_TOTAL,
     claimed: [],
@@ -262,7 +366,6 @@ async function handleWeeklyReset(interaction) {
     messageId: null,
   });
 
-  // Reset quadro de membros
   const guild = await interaction.client.guilds.fetch(process.env.GUILD_ID);
   const members = await guild.members.fetch();
   const tracked = members.filter(
@@ -282,17 +385,14 @@ async function handleWeeklyReset(interaction) {
   const { refreshStatusBoard } = require("./pens");
   await refreshStatusBoard(interaction.client);
 
-  await interaction.editReply(
-    "✅ Reset semanal completo! Relatório publicado, pens e quadro resetados.",
-  );
+  await interaction.editReply("✅ Reset semanal completo!");
   await refreshPanel(interaction.client);
 }
 
 // ─────────────────────────────────────────────
-//   HANDLERS DOS SELECT MENUS
+//   HANDLERS SELECT MENUS
 // ─────────────────────────────────────────────
 
-// Dropdown da droga → inicia sessão
 async function handleDrugSelect(interaction) {
   const drug = interaction.values[0];
   const def = DRUGS[drug];
@@ -306,12 +406,10 @@ async function handleDrugSelect(interaction) {
   };
 
   store.saveSession(session);
-
   const ch = await interaction.client.channels.fetch(
     process.env.SESSION_CHANNEL_ID,
   );
   const msg = await ch.send({ embeds: [buildSessionEmbed(session)] });
-
   session.messageId = msg.id;
   store.saveSession(session);
 
@@ -319,11 +417,9 @@ async function handleDrugSelect(interaction) {
     content: `✅ Sessão de ${def.emoji} **${def.name}** iniciada!`,
     components: [],
   });
-
   await refreshPanel(interaction.client);
 }
 
-// Dropdown civil/contratado → abre modal com quantidade
 async function handleTypeSelect(interaction) {
   const type = interaction.values[0];
   const session = store.getSession();
@@ -334,7 +430,6 @@ async function handleTypeSelect(interaction) {
     });
 
   const drug = DRUGS[session.drug];
-
   const modal = new ModalBuilder()
     .setCustomId(`panel_qty_modal_${type}`)
     .setTitle(
@@ -357,10 +452,9 @@ async function handleTypeSelect(interaction) {
 }
 
 // ─────────────────────────────────────────────
-//   HANDLERS DOS MODAIS
+//   HANDLERS MODAIS
 // ─────────────────────────────────────────────
 
-// Modal de quantidade → adiciona à sessão
 async function handleAddModal(interaction) {
   const session = store.getSession();
   if (!session)
@@ -370,8 +464,10 @@ async function handleAddModal(interaction) {
     });
 
   const type = interaction.customId.replace("panel_qty_modal_", "");
-  const rawQty = interaction.fields.getTextInputValue("add_qty").trim();
-  const qty = parseInt(rawQty, 10);
+  const qty = parseInt(
+    interaction.fields.getTextInputValue("add_qty").trim(),
+    10,
+  );
 
   if (isNaN(qty) || qty <= 0)
     return interaction.reply({
@@ -402,10 +498,8 @@ async function handleAddModal(interaction) {
   });
 }
 
-// Modal da meta → publica meta + pens numa só mensagem
 async function handleMetaModal(interaction) {
   const items = [];
-
   for (const [key] of Object.entries(MATERIALS)) {
     try {
       const raw = interaction.fields.getTextInputValue(`meta_${key}`).trim();
@@ -462,7 +556,6 @@ async function handleMetaModal(interaction) {
       .setStyle(ButtonStyle.Primary),
   );
 
-  // ← META_CHANNEL_ID em vez de SESSION_CHANNEL_ID
   const ch = await interaction.client.channels.fetch(
     process.env.META_CHANNEL_ID,
   );
@@ -478,6 +571,86 @@ async function handleMetaModal(interaction) {
   });
 }
 
+async function handleFightStartModal(interaction) {
+  const territorio = interaction.fields
+    .getTextInputValue("fight_territorio")
+    .trim();
+  const adversario = interaction.fields
+    .getTextInputValue("fight_adversario")
+    .trim();
+  const inicioNeg = interaction.fields.getTextInputValue("fight_inicio").trim();
+  const nosCount = interaction.fields.getTextInputValue("fight_nos").trim();
+  const elesCount = interaction.fields.getTextInputValue("fight_eles").trim();
+
+  const fight = {
+    territorio,
+    adversario,
+    inicioNeg,
+    nosCount,
+    elesCount,
+    openedBy: interaction.user.username,
+    openedAt: new Date().toISOString(),
+    messageId: null,
+  };
+
+  store.saveFight(fight);
+
+  // Ping + contagem no canal de contagens
+  const countsCh = await interaction.client.channels.fetch(
+    process.env.COUNTS_CHANNEL_ID,
+  );
+  await countsCh.send(
+    `<@&${process.env.ORG_ROLE_ID}> **${nosCount}** vs **${elesCount}** ${adversario}`,
+  );
+
+  // Embed da negociação no canal de fights
+  const fightsCh = await interaction.client.channels.fetch(
+    process.env.FIGHTS_CHANNEL_ID,
+  );
+  const msg = await fightsCh.send({ embeds: [buildFightEmbed(fight)] });
+  fight.messageId = msg.id;
+  store.saveFight(fight);
+
+  await interaction.reply({
+    content: "✅ Negociação registada!",
+    ephemeral: true,
+  });
+  await refreshPanel(interaction.client);
+}
+
+async function handleFightEndModal(interaction) {
+  const fight = store.getFight();
+  if (!fight)
+    return interaction.reply({
+      content: "❌ Nenhuma negociação ativa.",
+      ephemeral: true,
+    });
+
+  fight.fimNeg = interaction.fields.getTextInputValue("fight_fim").trim();
+  fight.desfecho = interaction.fields
+    .getTextInputValue("fight_desfecho")
+    .trim();
+  fight.closedBy = interaction.user.username;
+
+  try {
+    const ch = await interaction.client.channels.fetch(
+      process.env.FIGHTS_CHANNEL_ID,
+    );
+    const msg = await ch.messages.fetch(fight.messageId);
+    await msg.edit({ embeds: [buildFightEmbed(fight, true)] });
+  } catch (e) {
+    console.error("[Fight] Erro ao atualizar embed:", e.message);
+  }
+
+  store.clearFight();
+
+  await interaction.reply({
+    content: `✅ Negociação fechada! Desfecho: **${fight.desfecho}**`,
+    ephemeral: true,
+  });
+  await refreshPanel(interaction.client);
+}
+
 module.exports = {
   setupPanel,
   refreshPanel,
@@ -486,4 +659,6 @@ module.exports = {
   handleTypeSelect,
   handleAddModal,
   handleMetaModal,
+  handleFightStartModal,
+  handleFightEndModal,
 };
