@@ -1,6 +1,5 @@
 // =============================================
 //   utils/schedule.js  —  Marcação diária
-//   Uma mensagem por hora, cada uma com as suas reações
 // =============================================
 const { EmbedBuilder } = require("discord.js");
 const config = require("../config");
@@ -36,11 +35,11 @@ async function postDailySchedule(client) {
   const header = await channel.send({
     embeds: [
       new EmbedBuilder()
-        .setTitle(`📅  Marcação de Atividade — ${today}`)
+        .setTitle(`Marcação de Atividade — ${today}`)
         .setColor(0x5865f2)
         .setDescription(
-          `Reagir em **cada hora** com a tua disponibilidade:\n\n` +
-            `${yes} Disponível   ${no} Indisponível   ${maybe} Secalhar   ${contratado} Contratado\n\n` +
+          `Reage em **cada hora** com a tua disponibilidade:\n\n` +
+            `${yes} Disponível   ${no} Indisponível   ${maybe} Talvez\n\n` +
             `> As reações do bot são apenas para mostrar as opções — **não contam como voto.**`,
         ),
     ],
@@ -48,7 +47,6 @@ async function postDailySchedule(client) {
 
   // Uma mensagem por hora
   const messageIds = [header.id];
-
   for (const hour of config.SCHEDULE_HOURS) {
     const msg = await channel.send(`🕐 **${hour}**`);
     for (const emoji of Object.values(config.SCHEDULE_EMOJIS)) {
@@ -57,6 +55,9 @@ async function postDailySchedule(client) {
     messageIds.push(msg.id);
     await sleep(600);
   }
+
+  // Ping da org no fim a pedir para votar
+  await channel.send(`<@&${process.env.ORG_ROLE_ID}> Votar! ☝️`);
 
   store.saveSchedule({ messageIds, date: new Date().toISOString() });
   console.log(
@@ -73,7 +74,7 @@ async function countScheduleVotes(client) {
 
   const { yes, no, maybe } = config.SCHEDULE_EMOJIS;
   const results = [];
-  const hourIds = schedule.messageIds.slice(1); // primeiro é o cabeçalho
+  const hourIds = schedule.messageIds.slice(1);
 
   for (let i = 0; i < hourIds.length; i++) {
     try {

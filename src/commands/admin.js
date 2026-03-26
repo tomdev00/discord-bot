@@ -107,4 +107,17 @@ module.exports = [
       );
     },
   },
+  // ── /schedule-test ───────────────────────────
+  {
+    data: new SlashCommandBuilder()
+      .setName("schedule-test")
+      .setDescription("Publicar a marcação agora para testar")
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    async execute(interaction) {
+      await interaction.deferReply({ ephemeral: true });
+      const { postDailySchedule } = require("../utils/schedule");
+      await postDailySchedule(interaction.client);
+      await interaction.editReply("✅ Marcação de teste publicada!");
+    },
+  },
 ];
