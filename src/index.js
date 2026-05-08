@@ -1,46 +1,19 @@
-// =============================================
-//   src/index.js  —  Bot entry point
-// =============================================
 require("dotenv").config();
 const {
   Client,
   GatewayIntentBits,
   Partials,
-  Collection,
   Events,
 } = require("discord.js");
 const cron = require("node-cron");
 const config = require("./config");
-
-const {
-  setupPanel,
-  handlePanelButton,
-  handleDrugSelect,
-  handleTypeSelect,
-  handleAddModal,
-  handleMetaModal,
-  handleFightStartModal,
-} = require("./utils/panel");
 const { postDailySchedule } = require("./utils/schedule");
-const {
-  postPensMessage,
-  handlePensClaimButton,
-  initStatusBoard,
-} = require("./utils/pens");
-const { buildWeeklyEmbed, postDaySeparator } = require("./utils/session");
 const store = require("./utils/store");
 
-const sessionCommands = require("./commands/session");
-const adminCommands = require("./commands/admin");
-
-// ── Client ───────────────────────────────────
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
     GatewayIntentBits.GuildMessageReactions,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.MessageContent,
   ],
   partials: [
     Partials.Message,
@@ -50,304 +23,62 @@ const client = new Client({
   ],
 });
 
-// ── Commands ─────────────────────────────────
-client.commands = new Collection();
-for (const cmd of [...sessionCommands, ...adminCommands]) {
-  client.commands.set(cmd.data.name, cmd);
-}
-
-// ── Ready ─────────────────────────────────────
 client.once(Events.ClientReady, async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
-  await setupPanel(client);
-
-  // Separador de dia + marcação à meia-noite
   cron.schedule(
     "0 0 * * *",
     async () => {
-      console.log("[Cron] Separador de dia + marcação...");
-      const today = new Date().toDateString();
-      store.saveDaySeparator({ date: today });
-      await postDaySeparator(client);
-      const scheduleCh = await client.channels.fetch(
-        process.env.SCHEDULE_CHANNEL_ID,
-      );
-      await scheduleCh.send(`<@&${process.env.ORG_ROLE_ID}>`);
+      console.log("[Cron] A publicar marcação diária...");
       await postDailySchedule(client);
     },
     { timezone: process.env.TIMEZONE || "Europe/Lisbon" },
   );
 
-  // Reset semanal ao domingo
-  cron.schedule(
-    `0 0 * * ${config.WEEKLY_REPORT_DAY}`,
-    async () => {
-      console.log("[Cron] Weekly reset...");
-      try {
-        const ch = await client.channels.fetch(process.env.SESSION_CHANNEL_ID);
-        await ch.send({ embeds: [buildWeeklyEmbed()] });
-        store.clearWeekly();
-      } catch (e) {
-        console.error("[Cron] Weekly report error:", e.message);
-      }
-      await postPensMessage(client);
-      await initStatusBoard(client);
-    },
-    { timezone: process.env.TIMEZONE || "Europe/Lisbon" },
-  );
-
-  console.log("📅 Cron jobs scheduled.");
+  console.log("📅 Cron agendado para as 00:00.");
 });
 
-// ── Interactions ──────────────────────────────
-client.on(Events.InteractionCreate, async (interaction) => {
-  if (interaction.isButton()) {
-    if (interaction.customId.startsWith("panel_")) {
-      await handlePanelButton(interaction);
-      return;
-    }
-    if (interaction.customId === "pens_claim") {
-      await handlePensClaimButton(interaction);
-      return;
-    }
-    return;
-  }
-
-  if (interaction.isStringSelectMenu()) {
-    if (interaction.customId === "panel_drug_select") {
-      await handleDrugSelect(interaction);
-      return;
-    }
-    if (interaction.customId === "panel_type_select") {
-      await handleTypeSelect(interaction);
-      return;
-    }
-    return;
-  }
-
-  if (interaction.isModalSubmit()) {
-    if (interaction.customId.startsWith("panel_qty_modal_")) {
-      await handleAddModal(interaction);
-      return;
-    }
-    if (interaction.customId === "panel_meta_modal") {
-      await handleMetaModal(interaction);
-      return;
-    }
-    if (interaction.customId === "panel_fight_start_modal") {
-      await handleFightStartModal(interaction);
-      return;
-    }
-    return;
-  }
-
-  if (!interaction.isChatInputCommand()) return;
-  const command = client.commands.get(interaction.commandName);
-  if (!command) return;
-
-  try {
-    await command.execute(interaction);
-  } catch (err) {
-    console.error(`[Command] Error in /${interaction.commandName}:`, err);
-    const msg = { content: "❌ Algo correu mal.", ephemeral: true };
-    if (interaction.deferred || interaction.replied)
-      await interaction.editReply(msg).catch(() => {});
-    else await interaction.reply(msg).catch(() => {});
-  }
-});
-
-// ── Listener: prints no canal de prints ───────
-client.on(Events.MessageCreate, async (message) => {
-  if (message.author.bot) return;
-  if (message.channelId !== process.env.PRINTS_CHANNEL_ID) return;
-
-  const image = message.attachments.find((a) =>
-    a.contentType?.startsWith("image/"),
-  );
-  if (!image) {
-    const warn = await message.reply(
-      "⚠️ Tens de enviar uma **imagem** como print. Tenta outra vez.",
-    );
-    setTimeout(() => warn.delete().catch(() => {}), 5000);
-    return;
-  }
-
-  const chefiaChannel = await message.client.channels
-    .fetch(process.env.CHEFIA_CHANNEL_ID)
-    .catch(() => null);
-  if (!chefiaChannel) return;
-
-  const { EmbedBuilder } = require("discord.js");
-  const embed = new EmbedBuilder()
-    .setTitle("📸  Print de entrega — aguarda confirmação")
-    .setColor(0xfee75c)
-    .addFields(
-      {
-        name: "👤 Membro",
-        value: `<@${message.author.id}> (${message.author.username})`,
-        inline: true,
-      },
-      {
-        name: "📅 Data",
-        value: `<t:${Math.floor(message.createdTimestamp / 1000)}:F>`,
-        inline: true,
-      },
-      {
-        name: "🕐 Hora",
-        value: `<t:${Math.floor(message.createdTimestamp / 1000)}:T>`,
-        inline: true,
-      },
-    )
-    .setImage(image.url)
-    .setFooter({
-      text: `ID do membro: ${message.author.id} | Reage com ✅ para confirmar ou ❌ para rejeitar`,
-    })
-    .setTimestamp();
-
-  const chefiaMsg = await chefiaChannel.send({ embeds: [embed] });
-  await chefiaMsg.react("✅");
-  await chefiaMsg.react("❌");
-  await message.delete().catch(() => {});
-
-  const pending = store.getPendingPrints();
-  pending[chefiaMsg.id] = {
-    userId: message.author.id,
-    username: message.author.username,
-    sentAt: message.createdTimestamp,
-  };
-  store.savePendingPrints(pending);
-});
-
-// ── Listener: reações ─────────────────────────
+// Remove a reação do utilizador e guarda o voto internamente
 client.on(Events.MessageReactionAdd, async (reaction, user) => {
   if (user.bot) return;
 
-  // ── Desfecho da negociação
-  if (reaction.message.channelId === process.env.FIGHTS_CHANNEL_ID) {
-    const fight = store.getFight();
-    if (!fight || fight.messageId !== reaction.message.id) return;
+  const schedule = store.getSchedule();
+  if (!schedule?.messageIds?.length) return;
 
-    const emoji = reaction.emoji.name;
-    if (emoji === "🏆") fight.desfecho = "Vitória";
-    else if (emoji === "💀") fight.desfecho = "Derrota";
-    else if (emoji === "🚫") fight.desfecho = "Cancelado";
-    else return;
+  const hourIds = schedule.messageIds.slice(1); // ignora o header
+  const hourIndex = hourIds.indexOf(reaction.message.id);
+  if (hourIndex === -1) return;
 
-    store.saveFight(fight);
-
-    try {
-      const { buildFightEmbed } = require("./utils/fights");
-      await reaction.message.edit({ embeds: [buildFightEmbed(fight)] });
-    } catch (e) {
-      console.error("[Fight] Erro ao atualizar desfecho:", e.message);
-    }
-
-    store.clearFight();
-    const { refreshPanel } = require("./utils/panel");
-    await refreshPanel(client);
+  // Busca dados completos se necessário (partials)
+  try {
+    if (reaction.partial) await reaction.fetch();
+    if (user.partial) await user.fetch();
+  } catch (e) {
+    console.error("[Reaction] Erro ao fazer fetch:", e.message);
     return;
   }
 
-  // ── Confirmação de prints
-  if (reaction.message.channelId !== process.env.CHEFIA_CHANNEL_ID) return;
-
-  const pending = store.getPendingPrints();
-  const entry = pending[reaction.message.id];
-  if (!entry) return;
-
+  const hour = config.SCHEDULE_HOURS[hourIndex];
   const emoji = reaction.emoji.name;
-  const { EmbedBuilder } = require("discord.js");
 
-  if (emoji === "✅") {
-    const { refreshStatusBoard } = require("./utils/pens");
-    const status = store.getStatus();
-    if (status.members[entry.userId])
-      status.members[entry.userId].claimed = true;
-    store.saveStatus(status);
-    await refreshStatusBoard(client);
+  // Guarda o voto antes de remover
+  const votes = store.getVotes();
+  votes.push({
+    userId: user.id,
+    username: user.username,
+    hour,
+    emoji,
+    timestamp: new Date().toISOString(),
+  });
+  store.saveVotes(votes);
 
-    const embed = new EmbedBuilder()
-      .setTitle("✅  Print confirmada")
-      .setColor(0x57f287)
-      .addFields(
-        {
-          name: "👤 Membro",
-          value: `<@${entry.userId}> (${entry.username})`,
-          inline: true,
-        },
-        {
-          name: "📅 Data",
-          value: `<t:${Math.floor(entry.sentAt / 1000)}:F>`,
-          inline: true,
-        },
-        {
-          name: "🕐 Hora",
-          value: `<t:${Math.floor(entry.sentAt / 1000)}:T>`,
-          inline: true,
-        },
-        { name: "👮 Confirmado por", value: `<@${user.id}>`, inline: true },
-      )
-      .setImage(reaction.message.embeds[0]?.image?.url || "")
-      .setTimestamp();
-
-    await reaction.message.edit({ embeds: [embed] });
-
-    try {
-      const member = await client.users.fetch(entry.userId);
-      await member.send("✅ A tua entrega foi confirmada pela chefia!");
-    } catch {
-      /* DMs fechadas */
-    }
-  } else if (emoji === "❌") {
-    const embed = new EmbedBuilder()
-      .setTitle("❌  Print rejeitada")
-      .setColor(0xed4245)
-      .addFields(
-        {
-          name: "👤 Membro",
-          value: `<@${entry.userId}> (${entry.username})`,
-          inline: true,
-        },
-        {
-          name: "📅 Data",
-          value: `<t:${Math.floor(entry.sentAt / 1000)}:F>`,
-          inline: true,
-        },
-        {
-          name: "🕐 Hora",
-          value: `<t:${Math.floor(entry.sentAt / 1000)}:T>`,
-          inline: true,
-        },
-        { name: "👮 Rejeitado por", value: `<@${user.id}>`, inline: true },
-      )
-      .setImage(reaction.message.embeds[0]?.image?.url || "")
-      .setTimestamp();
-
-    await reaction.message.edit({ embeds: [embed] });
-
-    const pens = store.getPens();
-    const claim = pens.claimed.findIndex((c) => c.userId === entry.userId);
-    if (claim !== -1) {
-      pens.remaining += pens.claimed[claim].amount;
-      pens.claimed.splice(claim, 1);
-      store.savePens(pens);
-    }
-
-    try {
-      const member = await client.users.fetch(entry.userId);
-      await member.send(
-        `❌ A tua print foi rejeitada pela chefia. As tuas pens foram devolvidas.\n` +
-          `Envia uma nova print no canal <#${process.env.PRINTS_CHANNEL_ID}>.`,
-      );
-    } catch {
-      /* DMs fechadas */
-    }
+  // Remove a reação do utilizador
+  try {
+    await reaction.users.remove(user.id);
+    console.log(`[Voto] ${user.username} votou ${emoji} às ${hour} (removido)`);
+  } catch (e) {
+    console.error("[Reaction] Erro ao remover reação:", e.message);
   }
-
-  delete pending[reaction.message.id];
-  store.savePendingPrints(pending);
 });
 
-// ── Login ─────────────────────────────────────
 client.login(process.env.BOT_TOKEN);

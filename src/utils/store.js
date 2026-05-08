@@ -1,6 +1,3 @@
-// =============================================
-//   utils/store.js  —  Persistência em JSON
-// =============================================
 const fs = require("fs");
 const path = require("path");
 
@@ -23,68 +20,11 @@ function write(name, data) {
   fs.writeFileSync(filePath(name), JSON.stringify(data, null, 2), "utf8");
 }
 
-const store = {
-  // Sessão ativa
-  getSession: () => read("session"),
-  saveSession: (data) => write("session", data),
-  clearSession: () => write("session", null),
-
-  // Acumulado semanal
-  getWeekly: () =>
-    read("weekly") || {
-      drugs: {},
-      totalCost: 0,
-      totalRevenue: 0,
-      totalProfit: 0,
-    },
-  saveWeekly: (data) => write("weekly", data),
-  clearWeekly: () =>
-    write("weekly", {
-      drugs: {},
-      totalCost: 0,
-      totalRevenue: 0,
-      totalProfit: 0,
-    }),
-
-  // Meta semanal
-  getMeta: () => read("meta"),
-  saveMeta: (data) => write("meta", data),
-  clearMeta: () => write("meta", null),
-
-  // Pens
-  getPens: () =>
-    read("pens") || {
-      remaining: 300,
-      claimed: [],
-      contributions: {},
-      messageId: null,
-    },
-  savePens: (data) => write("pens", data),
-
-  // Quadro de membros
-  getStatus: () => read("status") || { messageId: null, members: {} },
-  saveStatus: (data) => write("status", data),
-
-  // Marcação diária
+module.exports = {
   getSchedule: () => read("schedule") || { messageIds: [] },
   saveSchedule: (data) => write("schedule", data),
 
-  // Painel da chefia
-  getPanel: () => read("panel"),
-  savePanel: (data) => write("panel", data),
-
-  // Prints pendentes de confirmação
-  getPendingPrints: () => read("pendingPrints") || {},
-  savePendingPrints: (data) => write("pendingPrints", data),
-
-  // Separador de dia
-  getDaySeparator: () => read("daySeparator") || { date: null },
-  saveDaySeparator: (data) => write("daySeparator", data),
-
-  // Negociação/fight ativa
-  getFight: () => read("fight"),
-  saveFight: (data) => write("fight", data),
-  clearFight: () => write("fight", null),
+  getVotes: () => read("votes") || [],
+  saveVotes: (data) => write("votes", data),
+  clearVotes: () => write("votes", []),
 };
-
-module.exports = store;
